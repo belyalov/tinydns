@@ -11,7 +11,7 @@ from uasyncio.core import IORead
 DNS_QUERY_START = const(12)
 
 
-class dnsserver():
+class Server():
     """Tiny DNS server aimed to serve very small deployments like "captive portal"
     """
 

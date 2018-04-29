@@ -92,8 +92,8 @@ class DnsTests(unittest.TestCase):
     """Simple sanity test - verify that "response" generates right packets"""
 
     def setUp(self):
-        self.dns = tinydns.dnsserver(domains={'ya.com': '192.168.5.1',
-                                              'google.com': '1.1.1.1'}, ttl=33)
+        self.dns = tinydns.Server(domains={'ya.com': '192.168.5.1',
+                                           'google.com': '1.1.1.1'}, ttl=33)
 
     def testYa(self):
         # Prepare mock socket to send ya.com query
@@ -165,8 +165,8 @@ class DnsTests(unittest.TestCase):
 
     def testUnknown(self):
         # Re-create server with empty list
-        self.dns = tinydns.dnsserver({})
-        # Prepare mock socket to send ya.com query
+        self.dns = tinydns.Server({})
+        # Prepare mock socket to d ya.com query
         msock = MockSocket(ya_com_rq)
         self.dns.sock = msock
         # Emulate that receiving of packet
@@ -179,8 +179,8 @@ class DnsTests(unittest.TestCase):
 
     def testUnknownIgnore(self):
         # Re-create server with empty list
-        self.dns = tinydns.dnsserver({}, ignore_unknown=True)
-        # Prepare mock socket to send ya.com query
+        self.dns = tinydns.Server({}, ignore_unknown=True)
+        # Prepare mock socket to d ya.com query
         msock = MockSocket(ya_com_rq)
         self.dns.sock = msock
         # Emulate that receiving of packet
