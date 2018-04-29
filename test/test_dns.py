@@ -21,10 +21,29 @@ from uasyncio.core import IORead
 ya_com_rq = b'\x49\x29\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x02\x79\x61\x03' \
             b'\x63\x6f\x6d\x00\x00\x01\x00\x01'
 
+# The same thing, but with type ALL (0xff), class IN
+ya_com_rq_all = b'\x49\x29\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x02\x79\x61\x03' \
+                b'\x63\x6f\x6d\x00\x00\xff\x00\x01'
+
+# The same, query type MX
+ya_com_rq_mx = b'\x49\x29\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x02\x79\x61\x03' \
+               b'\x63\x6f\x6d\x00\x00\x0f\x00\x01'
+
 # DNS Response, partial packet - without TTL / DataLen / IP address at the end
 ya_com_rp = b'\x49\x29\x85\x80\x00\x01\x00\x01\x00\x00\x00\x00\x02\x79\x61\x03' \
             b'\x63\x6f\x6d\x00\x00\x01\x00\x01\xc0\x0c\x00\x01\x00\x01'
 
+# DNS Response for unknown domain name case
+ya_com_rp2 = b'\x49\x29\x81\x83\x00\x01\x00\x00\x00\x00\x00\x00\x02\x79\x61\x03' \
+             b'\x63\x6f\x6d\x00\x00\x01\x00\x01'
+
+# Partial response for ALL class
+ya_com_rp_all = b'\x49\x29\x85\x80\x00\x01\x00\x01\x00\x00\x00\x00\x02\x79\x61\x03' \
+                b'\x63\x6f\x6d\x00\x00\xff\x00\x01\xc0\x0c\x00\x01\x00\x01'
+
+# Response for MX class, full pakcet
+ya_com_rp_mx = b'\x49\x29\x81\x80\x00\x01\x00\x00\x00\x00\x00\x00\x02\x79\x61\x03' \
+               b'\x63\x6f\x6d\x00\x00\x0f\x00\x01'
 
 # Transaction ID: 0x4147
 # Flags: 0x0100 Standard query
@@ -88,6 +107,30 @@ class DnsTests(unittest.TestCase):
         self.assertEqual(msock.addr, 100)
         self.assertEqual(msock.pack, mk_dns_response(ya_com_rp, '192.168.5.1', 33))
 
+    def testYaTypeAll(self):
+        # Prepare mock socket to send ya.com query
+        msock = MockSocket(ya_com_rq_all)
+        self.dns.sock = msock
+        # Emulate that receiving of packet
+        itr = self.dns.__handler()
+        self.assertIsInstance(next(itr), IORead)
+        self.assertIsInstance(next(itr), IORead)
+        # Check result - response should be "sent"
+        self.assertEqual(msock.addr, 100)
+        self.assertEqual(msock.pack, mk_dns_response(ya_com_rp_all, '192.168.5.1', 33))
+
+    def testYaTypeMX(self):
+        # Prepare mock socket to send ya.com query
+        msock = MockSocket(ya_com_rq_mx)
+        self.dns.sock = msock
+        # Emulate that receiving of packet
+        itr = self.dns.__handler()
+        self.assertIsInstance(next(itr), IORead)
+        self.assertIsInstance(next(itr), IORead)
+        # Check result - response should be "sent" without answers
+        self.assertEqual(msock.addr, 100)
+        self.assertEqual(msock.pack, ya_com_rp_mx)
+
     def testGoogle(self):
         # Prepare mock socket to send ya.com query
         msock = MockSocket(google_rq)
@@ -100,8 +143,18 @@ class DnsTests(unittest.TestCase):
         self.assertEqual(msock.addr, 100)
         self.assertEqual(msock.pack, mk_dns_response(google_rp, '1.1.1.1', 33))
 
-    def testMalformed(self):
+    def testMalformedShortPacket(self):
         msock = MockSocket(b'dshfjsd')
+        self.dns.sock = msock
+        itr = self.dns.__handler()
+        self.assertIsInstance(next(itr), IORead)
+        self.assertIsInstance(next(itr), IORead)
+        # Check result - should be not response sent
+        self.assertEqual(msock.addr, None)
+        self.assertEqual(msock.pack, None)
+
+    def testMalformedShortQuery(self):
+        msock = MockSocket(ya_com_rq[:14])
         self.dns.sock = msock
         itr = self.dns.__handler()
         self.assertIsInstance(next(itr), IORead)
@@ -113,6 +166,20 @@ class DnsTests(unittest.TestCase):
     def testUnknown(self):
         # Re-create server with empty list
         self.dns = tinydns.dnsserver({})
+        # Prepare mock socket to send ya.com query
+        msock = MockSocket(ya_com_rq)
+        self.dns.sock = msock
+        # Emulate that receiving of packet
+        itr = self.dns.__handler()
+        self.assertIsInstance(next(itr), IORead)
+        self.assertIsInstance(next(itr), IORead)
+        # Check result
+        self.assertEqual(msock.addr, 100)
+        self.assertEqual(msock.pack, ya_com_rp2)
+
+    def testUnknownIgnore(self):
+        # Re-create server with empty list
+        self.dns = tinydns.dnsserver({}, ignore_unknown=True)
         # Prepare mock socket to send ya.com query
         msock = MockSocket(ya_com_rq)
         self.dns.sock = msock

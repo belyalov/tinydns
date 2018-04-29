@@ -4,6 +4,7 @@ MIT license
 """
 import uasyncio as asyncio
 import usocket as socket
+import gc
 from uasyncio.core import IORead
 
 
@@ -14,15 +15,17 @@ class dnsserver():
     """Tiny DNS server aimed to serve very small deployments like "captive portal"
     """
 
-    def __init__(self, domains, ttl=10, max_pkt_len=512):
+    def __init__(self, domains, ttl=10, max_pkt_len=512, ignore_unknown=False):
         """Init DNS server class.
         Positional arguments:
-            domains     -- dict of domain -> IPv4 str
+            domains        -- dict of domain -> IPv4 str
         Keyword arguments:
-            ttl         -- TimeToLive, i.e. expiration timeout of DNS response.
-            max_pkt_len -- Max UDP datagram size.
+            ttl            -- TimeToLive, i.e. expiration timeout of DNS response.
+            max_pkt_len    -- Max UDP datagram size.
+            ignore_unknown -- do not send response for unknown domains
         """
         self.max_pkt_len = max_pkt_len
+        self.ignore_unknown = ignore_unknown
         self.sock = None
         # Don't use dict here - it doesn't support bytearray as key and
         # moreover, as TINY server so expecting only a few domains to resolve
@@ -52,6 +55,7 @@ class dnsserver():
             resp = b'\xc0\x0c\x00\x01\x00\x01' + bttl + b'\x00\x04' + bip
             # Insert tuple (dns question -> partial dns response)
             self.dlist.append((b''.join(req), resp))
+        gc.collect()
 
     def __handler(self):
         while True:
@@ -68,7 +72,23 @@ class dnsserver():
                 # We're tiny server - don't handle complicated queries
                 if qd != 1 or an > 0:
                     return None
-                query = packet[DNS_QUERY_START:]
+                query = bytearray(packet[DNS_QUERY_START:])
+                if len(query) <= 4:
+                    # malformed packet - query must be at least 5 bytes
+                    continue
+                # verify query type - only A/* supported
+                qtype = int.from_bytes(query[-4:-2], 'big')
+                if qtype not in [0x01, 0xff]:
+                    # unsupported query type, AAAA, CNAME, etc
+                    # Flags: 0x8180 Standard query response, No error
+                    resp = bytearray(packet)
+                    resp[2:4] = b'\x81\x80'
+                    self.sock.sendto(resp, addr)
+                    continue
+                # sometimes request may query for ALL records (0xff)
+                # since we're only support A records - simply override it to 0x01
+                query[-4:-2] = b'\x00\x01'
+                resp = None
                 for d in self.dlist:
                     if d[0] == query:
                         # Prepare response right from request :)
@@ -81,6 +101,13 @@ class dnsserver():
                         resp[len(packet):] = d[1]
                         self.sock.sendto(resp, addr)
                         break
+                if not resp and not self.ignore_unknown:
+                    # no such domain, just send req back with error flag set
+                    resp = bytearray(packet)
+                    # Flags: 0x8183 Standard query response, No such name
+                    resp[2:4] = b'\x81\x83'
+                    self.sock.sendto(resp, addr)
+                gc.collect()
             except Exception as e:
                 print('DNS server error: "{}", ignoring.'.format(e))
                 raise
