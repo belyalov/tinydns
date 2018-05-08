@@ -5,7 +5,6 @@ MIT license
 import uasyncio as asyncio
 import usocket as socket
 import gc
-from uasyncio.core import IORead
 
 
 DNS_QUERY_START = const(12)
@@ -27,6 +26,7 @@ class Server():
         self.max_pkt_len = max_pkt_len
         self.ignore_unknown = ignore_unknown
         self.sock = None
+        self.task = None
         # Don't use dict here - it doesn't support bytearray as key and
         # moreover, as TINY server so expecting only a few domains to resolve
         self.dlist = []
@@ -57,11 +57,11 @@ class Server():
             self.dlist.append((b''.join(req), resp))
         gc.collect()
 
-    def __handler(self):
+    async def __handler(self):
         while True:
             try:
                 # Wait for packet
-                yield IORead(self.sock)
+                yield asyncio.IORead(self.sock)
                 packet, addr = self.sock.recvfrom(self.max_pkt_len)
                 if len(packet) < DNS_QUERY_START:
                     # Malformed packet
@@ -108,11 +108,15 @@ class Server():
                     resp[2:4] = b'\x81\x83'
                     self.sock.sendto(resp, addr)
                 gc.collect()
+            except asyncio.CancelledError:
+                # Coroutine has been canceled
+                self.sock.close()
+                self.sock = None
+                return
             except Exception as e:
                 print('DNS server error: "{}", ignoring.'.format(e))
-                raise
 
-    def run(self, host='127.0.0.1', port=53):
+    def run(self, host='127.0.0.1', port=53, loop=None):
         # Start UDP server
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         addr = socket.getaddrinfo(host, port, 0, socket.SOCK_DGRAM)[0][-1]
@@ -120,9 +124,12 @@ class Server():
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(addr)
         self.sock = sock
-        asyncio.get_event_loop().create_task(self.__handler())
+        self.task = self.__handler()
+        if not loop:
+            loop = asyncio.get_event_loop()
+        loop.create_task(self.task)
 
     def shutdown(self):
-        if self.sock:
-            self.sock.close()
-            self.sock = None
+        if self.task:
+            asyncio.cancel(self.task)
+            self.task = None
