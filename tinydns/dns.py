@@ -14,7 +14,7 @@ class Server():
     """Tiny DNS server aimed to serve very small deployments like "captive portal"
     """
 
-    def __init__(self, domains, ttl=10, max_pkt_len=512, ignore_unknown=False):
+    def __init__(self, domains={}, ttl=10, max_pkt_len=512, ignore_unknown=False):
         """Init DNS server class.
         Positional arguments:
             domains        -- dict of domain -> IPv4 str
@@ -23,21 +23,31 @@ class Server():
             max_pkt_len    -- Max UDP datagram size.
             ignore_unknown -- do not send response for unknown domains
         """
+        self.ttl = ttl
         self.max_pkt_len = max_pkt_len
         self.ignore_unknown = ignore_unknown
         self.sock = None
         self.task = None
+        self.dlist = []
+        self.domains = domains.copy()
+        self.__preprocess_domains()
+
+    def add_domain(self, domain, ip):
+        self.domains[domain] = ip
+        self.__preprocess_domains()
+
+    def __preprocess_domains(self):
         # Don't use dict here - it doesn't support bytearray as key and
         # moreover, as TINY server so expecting only a few domains to resolve
         self.dlist = []
-        bttl = ttl.to_bytes(4, 'big')
+        bttl = self.ttl.to_bytes(4, 'big')
         # Pre-process domain -> IP pairs:
         # In order to consumer less memory / search efficiently we're building
         # DNS query record for each domain to be able to search for match
         # without memory allocation.
         # The same idea for DNS response - we can create it at init time -
         # to save time in run-time.
-        for name, ip in domains.items():
+        for name, ip in self.domains.items():
             # Convert domain into DNS style - len / label
             req = []
             for part in name.split('.'):
@@ -113,6 +123,8 @@ class Server():
                 self.sock.close()
                 self.sock = None
                 return
+            except AttributeError:
+                raise
             except Exception as e:
                 print('DNS server error: "{}", ignoring.'.format(e))
 

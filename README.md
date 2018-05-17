@@ -39,11 +39,13 @@ Coming very soon!
 
 ### Reference
 #### class `Server`
-* `__init__(self, domains, ttl=10, max_pkt_len=512, ignore_unknown=False)` - create `tinydns` server instance.
+* `__init__(self, domains={}, ttl=10, max_pkt_len=512, ignore_unknown=False)` - create `tinydns` server instance.
     * `domains` - **dict** of domains to resolve - *domain* -> *IPv4*. E.g. `{'my.com': '192.168.1.1', 'yep.com': '127.0.0.1'}`
     * `ttl` - Response TimeToLive, i.e. how long answer can be stored in the cache.
     * `max_pkt_len` - Maximum UDP packet length to serve. Due to memory constrained devices it is good to restrict datagram size.
     * `ignore_unknown` - Controls behavior for *unknown domain* case. If turned on - no error response will be generated.
+
+* `add_domain(self, domain, ip)` - add `domain` to resolved to `ip`. All parameters are `str`.
 
 * `run(self, host='127.0.0.1', port=53)` - run DNS server. Because of *tinydns* is fully async server and assumption here is you're running it as a part of some main application so it **will not** call `loop_forever()`.
     * `host` - host to listen on

@@ -132,7 +132,22 @@ class DnsTests(unittest.TestCase):
         self.assertEqual(msock.pack, ya_com_rp_mx)
 
     def testGoogle(self):
-        # Prepare mock socket to send ya.com query
+        # Prepare mock socket to send google.com query
+        msock = MockSocket(google_rq)
+        self.dns.sock = msock
+        # Emulate that receiving of packet
+        itr = self.dns.__handler()
+        self.assertIsInstance(next(itr), IORead)
+        self.assertIsInstance(next(itr), IORead)
+        # Check result - response should be "sent"
+        self.assertEqual(msock.addr, 100)
+        self.assertEqual(msock.pack, mk_dns_response(google_rp, '1.1.1.1', 33))
+
+    def testAddDomain(self):
+        # Re-create DNS class with empty list
+        self.dns = tinydns.Server(ttl=33)
+        self.dns.add_domain('google.com', '1.1.1.1')
+        # Prepare mock socket to send google.com query
         msock = MockSocket(google_rq)
         self.dns.sock = msock
         # Emulate that receiving of packet
