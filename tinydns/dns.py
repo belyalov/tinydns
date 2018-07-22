@@ -4,17 +4,19 @@ MIT license
 """
 import uasyncio as asyncio
 import usocket as socket
+import logging
 import gc
 
 
 DNS_QUERY_START = const(12)
+log = logging.getLogger('DNS')
 
 
 class Server():
     """Tiny DNS server aimed to serve very small deployments like "captive portal"
     """
 
-    def __init__(self, domains={}, ttl=10, max_pkt_len=512, ignore_unknown=False):
+    def __init__(self, domains={}, ttl=10, max_pkt_len=256, ignore_unknown=False):
         """Init DNS server class.
         Positional arguments:
             domains        -- dict of domain -> IPv4 str
@@ -126,7 +128,7 @@ class Server():
             except AttributeError:
                 raise
             except Exception as e:
-                print('DNS server error: "{}", ignoring.'.format(e))
+                log.exc(e, "")
 
     def run(self, host='127.0.0.1', port=53, loop=None):
         # Start UDP server
