@@ -130,7 +130,7 @@ class Server():
             except Exception as e:
                 log.exc(e, "")
 
-    def run(self, host='127.0.0.1', port=53, loop=None):
+    def run(self, host='127.0.0.1', port=53):
         # Start UDP server
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         addr = socket.getaddrinfo(host, port, 0, socket.SOCK_DGRAM)[0][-1]
@@ -139,9 +139,7 @@ class Server():
         sock.bind(addr)
         self.sock = sock
         self.task = self.__handler()
-        if not loop:
-            loop = asyncio.get_event_loop()
-        loop.create_task(self.task)
+        asyncio.get_event_loop().create_task(self.task)
 
     def shutdown(self):
         if self.task:
