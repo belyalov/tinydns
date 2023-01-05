@@ -5,6 +5,7 @@ MIT license
 import uasyncio as asyncio
 import usocket as socket
 import logging
+import re
 import gc
 
 
@@ -16,7 +17,7 @@ class Server():
     """Tiny DNS server aimed to serve very small deployments like "captive portal"
     """
 
-    def __init__(self, domains={}, ttl=10, max_pkt_len=256, ignore_unknown=False):
+    def __init__(self, domains={}, ttl=10, max_pkt_len=256, ignore_unknown=False, loop_forever=True):
         """Init DNS server class.
         Positional arguments:
             domains        -- dict of domain -> IPv4 str
@@ -34,11 +35,19 @@ class Server():
         self.domains = domains.copy()
         self.__preprocess_domains()
 
+        self.loop = asyncio.get_event_loop()
+        self.loop_forever = loop_forever
+
     def add_domain(self, domain, ip):
         self.domains[domain] = ip
         self.__preprocess_domains()
 
     def __preprocess_domains(self):
+        for name, ip in self.domains.items():
+            bip = bytes([int(x) for x in ip.split('.')])
+            self.dlist.append((re.compile(name), bip))
+
+    def __preprocess_domains_old(self):
         # Don't use dict here - it doesn't support bytearray as key and
         # moreover, as TINY server so expecting only a few domains to resolve
         self.dlist = []
@@ -74,51 +83,16 @@ class Server():
             try:
                 # Wait for packet
                 yield asyncio.IORead(self.sock)
+
                 packet, addr = self.sock.recvfrom(self.max_pkt_len)
                 if len(packet) < DNS_QUERY_START:
                     # Malformed packet
+                    log.error("DNS query is malformed, incorrect start")
                     continue
-                # Check question / answer count
-                qd = int.from_bytes(packet[4:6], 'big')
-                an = int.from_bytes(packet[6:8], 'big')
-                # We're tiny server - don't handle complicated queries
-                if qd != 1 or an > 0:
-                    return None
-                query = bytearray(packet[DNS_QUERY_START:])
-                if len(query) <= 4:
-                    # malformed packet - query must be at least 5 bytes
-                    continue
-                # verify query type - only A/* supported
-                qtype = int.from_bytes(query[-4:-2], 'big')
-                if qtype not in [0x01, 0xff]:
-                    # unsupported query type, AAAA, CNAME, etc
-                    # Flags: 0x8180 Standard query response, No error
-                    resp = bytearray(packet)
-                    resp[2:4] = b'\x81\x80'
-                    self.sock.sendto(resp, addr)
-                    continue
-                # sometimes request may query for ALL records (0xff)
-                # since we're only support A records - simply override it to 0x01
-                query[-4:-2] = b'\x00\x01'
-                resp = None
-                for d in self.dlist:
-                    if d[0] == query:
-                        # Prepare response right from request :)
-                        resp = bytearray(len(packet) + len(d[1]))
-                        resp[:len(packet)] = packet
-                        # Adjust flags
-                        resp[2:4] = b'\x85\x80'  # Flags and codes
-                        resp[6:8] = b'\x00\x01'  # Answer record count
-                        # Add answer
-                        resp[len(packet):] = d[1]
-                        self.sock.sendto(resp, addr)
-                        break
-                if not resp and not self.ignore_unknown:
-                    # no such domain, just send req back with error flag set
-                    resp = bytearray(packet)
-                    # Flags: 0x8183 Standard query response, No such name
-                    resp[2:4] = b'\x81\x83'
-                    self.sock.sendto(resp, addr)
+
+                # handle packet
+                self.handlePacket(packet, addr)
+
                 gc.collect()
             except asyncio.CancelledError:
                 # Coroutine has been canceled
@@ -130,6 +104,105 @@ class Server():
             except Exception as e:
                 log.exc(e, "")
 
+    def handlePacket(self, packet, addr):
+        # Check question / answer count
+        qd = int.from_bytes(packet[4:6], 'big')
+        log.debug("Questions: %d", qd)
+        an = int.from_bytes(packet[6:8], 'big')
+        log.debug("Answers: %d", an)
+
+        # We're tiny server - don't handle complicated queries
+        if qd != 1 or an > 0:
+            log.debug("DNS query is to complicated")
+            return None
+
+        if len(packet) <= DNS_QUERY_START + 4:
+            # malformed packet - query must be at least 5 bytes
+            log.error("DNS query is to malformed (query most be at least 16 bytes)")
+            return
+
+        # read domain name from query
+        domain = ""
+        # header is 12 bytes long
+        head = DNS_QUERY_START
+        # length of this label defined in first byte
+        length = packet[head]
+        while length != 0:
+            label = head + 1
+            # add the label to the requested domain and insert a dot after
+            domain += packet[label : label + length].decode("utf-8") + "."
+            # check if there is another label after this on
+            head += length + 1
+            length = packet[head]
+        # advance head once more, so that we are beyond the domain part
+        head += 1
+
+        log.debug("Domain: %s", domain)
+
+        # get query type - only A/* supported
+        qtype = int.from_bytes(packet[head:head+2], 'big')
+        log.debug("qtype: %d", qtype)
+
+        # verify query type 
+        if qtype not in [0x01, 0xff]:
+            # unsupported query type, AAAA, CNAME, etc
+            # Flags: 0x8180 Standard query response, No error
+            resp = bytearray(packet)
+            resp[2:4] = b'\x81\x80'
+            self.sock.sendto(resp, addr)
+            log.debug("Unsupported query type: %d", qtype)
+            return
+
+        # query type is of A type, try to get matching domain!
+        matchDomain = self.getMatchingDomain(domain)
+        if not matchDomain:
+            # no matching domain
+            resp = bytearray(packet)
+            # Flags: 0x8183 Standard query response, No such name
+            resp[2:4] = b'\x81\x83'
+            self.sock.sendto(resp, addr)
+            return
+
+        # ????
+        if not matchDomain and not self.ignore_unknown:
+            return
+
+        # Prepare response right from request :)
+        # copy the ID from incoming request
+        resp = packet[:2]
+        # set response flags (assume RD=1 from request)
+        resp += b"\x81\x80"
+        # copy over QDCOUNT and set ANCOUNT equal
+        resp += packet[4:6] + packet[4:6]
+        # set NSCOUNT and ARCOUNT to 0
+        resp += b"\x00\x00\x00\x00"
+
+        # ** create the answer body **
+        # respond with original domain name question
+        # take from question start + qtype and qclass
+        resp += packet[DNS_QUERY_START:head+2+2]
+        # pointer back to domain name (at byte 12)
+        resp += b"\xC0\x0C"
+        # set TYPE and CLASS (A record and IN class)
+        resp += b"\x00\x01\x00\x01"
+        # set TTL to 60sec
+        resp += b"\x00\x00\x00\x3C"
+        # set response length to 4 bytes (to hold one IPv4 address)
+        resp += b"\x00\x04"
+        # now actually send the IP address as 4 bytes (without the "."s)
+        resp += matchDomain[1]
+
+        self.sock.sendto(resp, addr)
+
+    def getMatchingDomain(self, domain):
+        domain = domain[:-1]
+
+        for d in self.dlist:
+            if d[0].match(domain):
+                return d
+        return None
+        
+
     def run(self, host='127.0.0.1', port=53):
         # Start UDP server
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -139,7 +212,10 @@ class Server():
         sock.bind(addr)
         self.sock = sock
         self.task = self.__handler()
-        asyncio.get_event_loop().create_task(self.task)
+
+        self.loop.create_task(self.task)
+        if self.loop_forever:
+            self.loop.run_forever()
 
     def shutdown(self):
         if self.task:
